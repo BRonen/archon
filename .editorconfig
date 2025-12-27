@@ -1,0 +1,6 @@
+root = true
+
+[*.{kt,kts}]
+ktlint_standard_max-line-length = disabled
+ktlint_standard_class-signature = disabled
+ktlint_standard_function-signature = disabled
