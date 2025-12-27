@@ -1,0 +1,5 @@
+#+title: Archon
+
+ * Archon
+   This is a [[https://raft.github.io/][Raft consensus algorithm]] library used to implement [[https://journal.resonatehq.io/p/deterministic-simulation-testing][deterministic simulation testing]].
+
