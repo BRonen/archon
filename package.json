@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@informalsystems/quint-language-server": "^0.17.0"
+  }
+}

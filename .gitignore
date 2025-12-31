@@ -3,6 +3,7 @@ kotlinc/
 .kotlin/
 **/build/
 *.log
+node_modules/
 
 # Ignore Gradle project-specific cache directory
 .gradle

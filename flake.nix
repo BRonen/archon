@@ -29,6 +29,11 @@
         };
         devShells.default = pkgs.mkShell {
           buildInputs = [
+            # Quint Spec Deps
+            pkgs.quint
+            pkgs.nodejs
+
+            # Dev Deps
             pkgs.gradle
             pkgs.openjdk21
             pkgs.kotlin
@@ -38,6 +43,8 @@
 
           shellHook = ''
             export GRADLE_USER_HOME="$PWD/.gradle"
+            export PATH="$PATH:$(pwd)/node_modules/.bin"
+            npm install @informalsystems/quint-language-server -D
           '';
         };
       });
