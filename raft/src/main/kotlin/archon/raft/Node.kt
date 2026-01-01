@@ -1,15 +1,11 @@
 package archon.raft
 
-sealed class Timer {
-    // will have more Timers here...
+import archon.moirai.Node
+import archon.moirai.Context
+import archon.moirai.EventPayload
 
+sealed class Timer() {
     data class Custom(val id: String) : Timer()
-}
-
-sealed class EventPayload {
-    data class Network(val sender: Int, val message: Message) : EventPayload()
-
-    data class Timeout(val timer: Timer) : EventPayload()
 }
 
 sealed class Message() {
@@ -18,37 +14,23 @@ sealed class Message() {
     class Pong() : Message()
 }
 
-interface Context {
-    fun now(): Long
-
-    fun send(receiver: Int, message: Message)
-
-    fun schedule(timer: Timer, delay: Long)
-
-    fun random(range: IntRange): Int
-}
-
-interface Node {
-    fun onEvent(event: EventPayload)
-}
-
-class RaftNode(
-    val context: Context,
-) : Node {
-    private fun onNetwork(event: EventPayload.Network) {
+class RaftNode<C : Context<Timer, Message>>(
+    override val context: C,
+) : Node<Timer, Message, C> {
+    private fun onNetwork(event: EventPayload.Network<Timer, Message>) {
         when (event.message) {
             is Message.Ping -> this.context.send(event.sender, Message.Pong())
             is Message.Pong -> println("pong received from ${event.sender}")
         }
     }
 
-    private fun onTimeout(event: EventPayload.Timeout) {
-        when (event.timer) {
-            is Timer.Custom -> println("event ${event.timer.id} received")
+    private fun onTimeout(event: EventPayload.Timeout<Timer, Message>) {
+        when (val timer = event.timer) {
+            is Timer.Custom -> println("timer ${timer.id} reached")
         }
     }
 
-    override fun onEvent(event: EventPayload) {
+    override fun onEvent(event: EventPayload<Timer, Message>) {
         when (event) {
             is EventPayload.Network -> this.onNetwork(event)
             is EventPayload.Timeout -> this.onTimeout(event)

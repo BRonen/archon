@@ -3,4 +3,4 @@ plugins {
 }
 
 rootProject.name = "archon"
-include("raft")
+include("raft", "moirai")
