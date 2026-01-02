@@ -1,32 +1,90 @@
 package archon.raft
 
-import archon.moirai.Node
 import archon.moirai.Context
 import archon.moirai.EventPayload
+import archon.moirai.Node
 
-sealed class Timer() {
-    data class Custom(val id: String) : Timer()
+sealed class Option<out T> {
+    data class Some<out T>(val value: T) : Option<T>()
+
+    data object None : Option<Nothing>()
 }
 
-sealed class Message() {
-    class Ping() : Message()
+sealed class Role {
+    data object Leader : Role()
 
-    class Pong() : Message()
+    data object Candidate : Role()
+
+    data object Follower : Role()
+}
+
+sealed class Timer {
+    data class ElectionsTrigger(val term: Int) : Timer()
+}
+
+sealed class Message {
+    data class VoteRequest(val term: Int) : Message()
+
+    data class VoteResponse(val term: Int) : Message()
+
+    data class AppendEntries(val term: Int) : Message()
 }
 
 class RaftNode<C : Context<Timer, Message>>(
-    override val context: C,
+    override var context: C,
+    override val nodeid: Int,
+    val quorumSize: Int,
 ) : Node<Timer, Message, C> {
+    var term: Int = 0
+    var role: Role = Role.Follower
+
+    var votesReceived: Int = 0
+    var votedFor: Option<Int> = Option.None
+
+    var leaderHeard: Boolean = false
+
     private fun onNetwork(event: EventPayload.Network<Timer, Message>) {
-        when (event.message) {
-            is Message.Ping -> this.context.send(event.sender, Message.Pong())
-            is Message.Pong -> println("pong received from ${event.sender}")
+        when (val message = event.message) {
+            is Message.VoteRequest -> {
+                if (message.term < this.term) return
+                if (this.role != Role.Follower) return
+
+                this.term = message.term
+                this.votedFor = Option.Some(event.sender)
+
+                context.send(event.sender, Message.VoteResponse(this.term))
+            }
+            is Message.VoteResponse -> {
+                if (message.term < this.term) return
+                if (this.role != Role.Candidate) return
+
+                this.votesReceived += 1
+                if (votesReceived < this.quorumSize) return
+
+                this.role = Role.Leader
+
+                context.broadcast(Message.AppendEntries(this.term))
+            }
+            is Message.AppendEntries -> {
+                if (message.term < this.term) return
+
+                this.leaderHeard = true
+                this.role = Role.Follower
+            }
         }
     }
 
     private fun onTimeout(event: EventPayload.Timeout<Timer, Message>) {
         when (val timer = event.timer) {
-            is Timer.Custom -> println("timer ${timer.id} reached")
+            is Timer.ElectionsTrigger -> {
+                if (this.role != Role.Follower) return
+                if (this.votedFor != Option.None) return
+
+                this.role = Role.Candidate
+                this.votesReceived += 1
+                this.votedFor = Option.Some(this.nodeid)
+                context.broadcast(Message.VoteRequest(this.term))
+            }
         }
     }
 
@@ -35,5 +93,22 @@ class RaftNode<C : Context<Timer, Message>>(
             is EventPayload.Network -> this.onNetwork(event)
             is EventPayload.Timeout -> this.onTimeout(event)
         }
+    }
+
+    override fun onInit() {
+        if (this.role != Role.Follower || this.leaderHeard) return
+
+        this.term += 1
+        val delay = context.random(50..100).toLong()
+        context.schedule(Timer.ElectionsTrigger(this.term), delay)
+    }
+
+    override fun dumpState() {
+        this.context.dumpState()
+        println("  term: ${this.term}")
+        println("  role: ${this.role}")
+        println("  votesReceived: ${this.votesReceived}")
+        println("  votedFor: ${this.votedFor}")
+        println("  leaderHeard: ${this.leaderHeard}")
     }
 }

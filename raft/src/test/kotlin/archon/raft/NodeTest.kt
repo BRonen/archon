@@ -1,24 +1,30 @@
 package archon.raft
 
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Test
-
-import archon.moirai.Simulator
-import archon.moirai.SimulationContext
 import archon.moirai.Event
 import archon.moirai.EventPayload
+import archon.moirai.SimulationContext
+import archon.moirai.Simulator
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
 
 class LibraryTest {
     @Test
     fun foobar() {
         val simulator = Simulator<Timer, Message>(42)
 
-        simulator.registerNode(0) { RaftNode<SimulationContext<Timer, Message>>(it) }
-        simulator.registerNode(1) { RaftNode<SimulationContext<Timer, Message>>(it) }
+        val nodesCount = 3
+        val quorumSize = (nodesCount / 2) + 1
 
-        simulator.queue.add(Event(0, EventPayload.Network(1, Message.Ping()), 100))
-        simulator.queue.add(Event(1, EventPayload.Network(0, Message.Ping()), 100))
+        for (i in 1..nodesCount) {
+            simulator.registerNode { nodeid, context ->
+                RaftNode<SimulationContext<Timer, Message>>(context, nodeid, quorumSize)
+            }
+        }
 
-        simulator.run()
+        simulator.dumpState()
+
+        simulator.init()
+
+        for (i in 0..100) simulator.run()
     }
 }
