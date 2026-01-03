@@ -47,7 +47,7 @@ class SimulationContext<T, M>(
     private val sender: Int,
     private val queue: PriorityQueue<Event<T, M>>,
     private val random: kotlin.random.Random,
-    private val nodes: MutableMap<Int, Node<T, M, SimulationContext<T, M>>>,
+    private val nodes: Map<Int, Node<T, M, SimulationContext<T, M>>>,
 ) : Context<T, M> {
     var internalClock: Long = 0
         set(value) {
@@ -98,7 +98,9 @@ class SimulationContext<T, M>(
     }
 }
 
-class Simulator<T, M>(val seed: Long) {
+class Simulator<T, M>(
+    val seed: Long,
+) {
     private val random = kotlin.random.Random(seed)
     val queue = PriorityQueue<Event<T, M>>()
     val nodes = mutableMapOf<Int, Node<T, M, SimulationContext<T, M>>>()
@@ -117,7 +119,7 @@ class Simulator<T, M>(val seed: Long) {
     fun registerNode(nodeFactory: (Int, SimulationContext<T, M>) -> Node<T, M, SimulationContext<T, M>>) {
         val nodeid = this.nodes.size
 
-        val context = SimulationContext(nodeid, this.queue, this.random, this.nodes)
+        val context = SimulationContext(nodeid, this.queue, this.random, this.nodes.toMap())
         val node = nodeFactory(nodeid, context)
 
         this.nodes[nodeid] = node
