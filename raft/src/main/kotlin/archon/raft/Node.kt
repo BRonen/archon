@@ -47,12 +47,21 @@ class RaftNode<C : Context<Timer, Message>>(
         when (val message = event.message) {
             is Message.VoteRequest -> {
                 if (message.term < this.term) return
+
+                if (message.term > this.term) {
+                    this.term = message.term
+                    this.role = Role.Follower
+                    this.votedFor = Option.Some(event.sender)
+
+                    return context.send(event.sender, Message.VoteResponse(this.term))
+                }
+
                 if (this.role != Role.Follower) return
 
                 this.term = message.term
                 this.votedFor = Option.Some(event.sender)
 
-                context.send(event.sender, Message.VoteResponse(this.term))
+                return context.send(event.sender, Message.VoteResponse(this.term))
             }
             is Message.VoteResponse -> {
                 if (message.term < this.term) return
@@ -77,13 +86,17 @@ class RaftNode<C : Context<Timer, Message>>(
     private fun onTimeout(event: EventPayload.Timeout<Timer, Message>) {
         when (val timer = event.timer) {
             is Timer.ElectionsTrigger -> {
-                if (this.role != Role.Follower) return
-                if (this.votedFor != Option.None) return
+                if (this.term < timer.term) throw RuntimeException("Timeout dispatched in an invalid future term")
+                if (this.term > timer.term) return
 
+                this.term += 1
                 this.role = Role.Candidate
-                this.votesReceived += 1
+                this.votesReceived = 1
                 this.votedFor = Option.Some(this.nodeid)
                 context.broadcast(Message.VoteRequest(this.term))
+
+                val delay = context.random(50..100).toLong()
+                context.schedule(Timer.ElectionsTrigger(this.term), delay)
             }
         }
     }
@@ -98,7 +111,6 @@ class RaftNode<C : Context<Timer, Message>>(
     override fun onInit() {
         if (this.role != Role.Follower || this.leaderHeard) return
 
-        this.term += 1
         val delay = context.random(50..100).toLong()
         context.schedule(Timer.ElectionsTrigger(this.term), delay)
     }
