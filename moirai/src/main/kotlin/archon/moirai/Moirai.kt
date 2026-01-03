@@ -67,7 +67,7 @@ class SimulationContext<T, M>(
     }
 
     override fun send(receiver: Int, message: M) {
-        println("[Moirai] ${this.sender} -> broadcast($receiver, $message)")
+        println("[Moirai] ${this.sender} -> send($receiver, $message)")
         val latency = this.random.nextInt(5, 50)
         val payload = EventPayload.Network<T, M>(this.sender, message)
 
@@ -78,15 +78,10 @@ class SimulationContext<T, M>(
 
     override fun broadcast(message: M) {
         println("[Moirai] ${this.sender} -> broadcast($message)")
-        this.nodes.keys.forEach { receiver ->
-            if (this.sender == receiver) return
+        for (receiver in this.nodes.keys) {
+            if (this.sender == receiver) continue
 
-            val latency = this.random.nextInt(5, 50)
-            val payload = EventPayload.Network<T, M>(this.sender, message)
-
-            require(this.internalClock + latency >= this.internalClock) { "[Moirai] error invalid send" }
-
-            this.queue.add(Event<T, M>(receiver, payload, this.internalClock + latency))
+            this.send(receiver, message)
         }
     }
 

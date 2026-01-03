@@ -19,7 +19,9 @@ sealed class Role {
 }
 
 sealed class Timer {
-    data class ElectionsTrigger(val term: Int) : Timer()
+    data class ElectionsTrigger(val term: Int, val version: Int) : Timer()
+
+    data class AppendEntriesTrigger(val term: Int, val version: Int) : Timer()
 }
 
 sealed class Message {
@@ -41,45 +43,62 @@ class RaftNode<C : Context<Timer, Message>>(
     var votesReceived: Int = 0
     var votedFor: Option<Int> = Option.None
 
-    var leaderHeard: Boolean = false
+    var electionTimerVersion: Int = 0
+    var appendEntriesTimerVersion: Int = 0
+
+    private fun voteRequest(message: Message.VoteRequest, sender: Int) {
+        if (message.term < this.term) return
+
+        if (message.term > this.term) {
+            this.term = message.term
+            this.role = Role.Follower
+            this.votedFor = Option.Some(sender)
+
+            return context.send(sender, Message.VoteResponse(this.term))
+        }
+
+        if (this.role != Role.Follower) return
+        if (this.votedFor != Option.None) return
+
+        this.votedFor = Option.Some(sender)
+
+        return context.send(sender, Message.VoteResponse(this.term))
+    }
+
+    private fun voteResponse(message: Message.VoteResponse) {
+        if (message.term < this.term) return
+        if (this.role != Role.Candidate) return
+
+        this.votesReceived += 1
+        if (votesReceived < this.quorumSize) return
+
+        this.role = Role.Leader
+
+        context.broadcast(Message.AppendEntries(this.term))
+
+        this.appendEntriesTimerVersion += 1
+        val delay = context.random(50..150).toLong()
+        context.schedule(Timer.AppendEntriesTrigger(this.term, this.appendEntriesTimerVersion), delay)
+    }
+
+    private fun appendEntries(message: Message.AppendEntries) {
+        if (message.term < this.term) return
+
+        this.term = message.term
+        this.role = Role.Follower
+        this.votedFor = Option.None
+        this.votesReceived = 0
+
+        this.electionTimerVersion += 1
+        val delay = context.random(50..150).toLong()
+        context.schedule(Timer.ElectionsTrigger(this.term, this.electionTimerVersion), delay)
+    }
 
     private fun onNetwork(event: EventPayload.Network<Timer, Message>) {
         when (val message = event.message) {
-            is Message.VoteRequest -> {
-                if (message.term < this.term) return
-
-                if (message.term > this.term) {
-                    this.term = message.term
-                    this.role = Role.Follower
-                    this.votedFor = Option.Some(event.sender)
-
-                    return context.send(event.sender, Message.VoteResponse(this.term))
-                }
-
-                if (this.role != Role.Follower) return
-
-                this.term = message.term
-                this.votedFor = Option.Some(event.sender)
-
-                return context.send(event.sender, Message.VoteResponse(this.term))
-            }
-            is Message.VoteResponse -> {
-                if (message.term < this.term) return
-                if (this.role != Role.Candidate) return
-
-                this.votesReceived += 1
-                if (votesReceived < this.quorumSize) return
-
-                this.role = Role.Leader
-
-                context.broadcast(Message.AppendEntries(this.term))
-            }
-            is Message.AppendEntries -> {
-                if (message.term < this.term) return
-
-                this.leaderHeard = true
-                this.role = Role.Follower
-            }
+            is Message.VoteRequest -> this.voteRequest(message, event.sender)
+            is Message.VoteResponse -> this.voteResponse(message)
+            is Message.AppendEntries -> this.appendEntries(message)
         }
     }
 
@@ -88,6 +107,9 @@ class RaftNode<C : Context<Timer, Message>>(
             is Timer.ElectionsTrigger -> {
                 if (this.term < timer.term) throw RuntimeException("Timeout dispatched in an invalid future term")
                 if (this.term > timer.term) return
+                if (this.electionTimerVersion != timer.version) return
+
+                if (this.role == Role.Leader) return
 
                 this.term += 1
                 this.role = Role.Candidate
@@ -95,8 +117,20 @@ class RaftNode<C : Context<Timer, Message>>(
                 this.votedFor = Option.Some(this.nodeid)
                 context.broadcast(Message.VoteRequest(this.term))
 
-                val delay = context.random(50..100).toLong()
-                context.schedule(Timer.ElectionsTrigger(this.term), delay)
+                this.electionTimerVersion += 1
+                val delay = context.random(50..150).toLong()
+                context.schedule(Timer.ElectionsTrigger(this.term, this.electionTimerVersion), delay)
+            }
+            is Timer.AppendEntriesTrigger -> {
+                if (this.term < timer.term) throw RuntimeException("Timeout dispatched in an invalid future term")
+                if (this.term > timer.term) return
+                if (this.appendEntriesTimerVersion != timer.version) return
+
+                context.broadcast(Message.AppendEntries(this.term))
+
+                this.appendEntriesTimerVersion += 1
+                val delay = context.random(50..150).toLong()
+                context.schedule(Timer.AppendEntriesTrigger(this.term, this.appendEntriesTimerVersion), delay)
             }
         }
     }
@@ -109,10 +143,8 @@ class RaftNode<C : Context<Timer, Message>>(
     }
 
     override fun onInit() {
-        if (this.role != Role.Follower || this.leaderHeard) return
-
-        val delay = context.random(50..100).toLong()
-        context.schedule(Timer.ElectionsTrigger(this.term), delay)
+        val delay = context.random(50..150).toLong()
+        context.schedule(Timer.ElectionsTrigger(this.term, this.electionTimerVersion), delay)
     }
 
     override fun dumpState() {
@@ -121,6 +153,7 @@ class RaftNode<C : Context<Timer, Message>>(
         println("  role: ${this.role}")
         println("  votesReceived: ${this.votesReceived}")
         println("  votedFor: ${this.votedFor}")
-        println("  leaderHeard: ${this.leaderHeard}")
+        println("  electionTimerVersion: ${this.electionTimerVersion}")
+        println("  appendEntriesTimerVersion: ${this.appendEntriesTimerVersion}")
     }
 }
