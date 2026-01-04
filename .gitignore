@@ -3,6 +3,8 @@ kotlinc/
 .kotlin/
 **/build/
 *.log
+node_modules/
+**/_apalache-out
 
 # Ignore Gradle project-specific cache directory
 .gradle
