@@ -11,6 +11,9 @@
         testScript = pkgs.writeShellScriptBin "test" ''
           ${pkgs.gradle}/bin/gradle test
         '';
+        specScript = pkgs.writeShellScriptBin "spec" ''
+          ${pkgs.quint}/bin/quint run ./spec/raft.qnt --max-steps=50 --mbt --invariants foobar
+        '';
 
         # kotlinLspPatch = pkgs.writeShellScriptBin "kotlin-language-server" ''
         #   JAVA_OPTS="-Xms1g -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication" \
@@ -27,6 +30,16 @@
           ];
           program = "${testScript}/bin/test";
         };
+
+        apps.spec = {
+          type = "app";
+          buildInputs = with pkgs;[
+            pkgs.quint
+            pkgs.nodejs
+          ];
+          program = "${specScript}/bin/spec";
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = [
             # Quint Spec Deps
