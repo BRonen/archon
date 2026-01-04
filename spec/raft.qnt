@@ -12,16 +12,15 @@ module raft {
     | None
 
   type Message =
-    | RequestVote({ term: Term, candidateId: Node })
-    | VoteResponse({ term: Term, granted: bool, voterId: Node, target: Node })
-    | AppendEntries({ term: Term, leaderId: Node })
+    | RequestVote({ to: Node, from: Node, term: Term })
+    | VoteResponse({ to: Node, from: Node, term: Term, granted: bool })
+    | AppendEntries({ to: Node, from: Node, term: Term })
 
-  var clock: Node -> int
   var currentTerm: Node -> Term
+  var leaderHeard: Node -> bool
   var votedFor: Node -> MaybeVote
   var votesReceived: Node -> int
-  var state: Node -> Role
-  var leaderHeard: Node -> bool
+  var role: Node -> Role
 
   var network: Set[Message]
 
@@ -33,71 +32,72 @@ module raft {
     val peers = Nodes.exclude(Set(n))
 
     all {
-      state.get(n) == Follower,
+      role.get(n) != Leader,
       leaderHeard.get(n) == false,
 
-      leaderHeard' = leaderHeard.set(n, false),
-      state' = state.set(n, Candidate),
+      votesReceived' = votesReceived.set(n, votesReceived.get(n) + 1),
+      leaderHeard' = leaderHeard,
+      role' = role.set(n, Candidate),
       currentTerm' = currentTerm.set(n, newTerm),
       votedFor' = votedFor.set(n, Vote({ node: n })),
       network' = network.union(
-        peers.map(peer => RequestVote({ term: newTerm, candidateId: n }))
+        peers.map(peer => RequestVote({ to: peer, from: n, term: newTerm }))
       )
     }
   }
 
-  action handleRequestVote(n, msg) = {
-    match msg {
-      | RequestVote(m) => {
-          val canVote = m.term >= currentTerm.get(n) and votedFor.get(n) == None
+  action handleRequestVote(payload, msg) = all {
+    val canVote = or {
+      payload.term == currentTerm.get(payload.to) and votedFor.get(payload.to) == None,
+      payload.term > currentTerm.get(payload.to)
+    }
 
-          if (canVote) all {
-            currentTerm' = currentTerm.set(n, m.term),
-            votedFor' = votedFor.set(n, Vote({ node: m.candidateId })),
-            network' = network.union(
-              Set(
-                VoteResponse({
-                  term: m.term,
-                  granted: true,
-                  voterId: n,
-                  target: m.candidateId
-                })
-              )
-            ),
-            state' = state
-          } else all {
-            network' = network.union(
-              Set(
-                VoteResponse({
-                  term: currentTerm.get(n),
-                  granted: false,
-                  voterId: n,
-                  target: m.candidateId
-                })
-              )
-            ),
-            currentTerm' = currentTerm,
-            votedFor' = votedFor,
-            state' = state
-          }
-      }
-      | _ => all {
-        currentTerm' = currentTerm,
-        votedFor' = votedFor,
-        state' = state,
-        network' = network
-      }
+    if (canVote) all {
+      currentTerm' = currentTerm.set(payload.to, payload.term),
+      votesReceived' = votesReceived.set(payload.to, 0),
+      votedFor' = votedFor.set(payload.to, Vote({ node: payload.from })),
+      role' = role.set(payload.to, Follower),
+      leaderHeard' = leaderHeard.set(payload.to, true),
+
+      network' = network.exclude(Set(msg)).union(
+        Set(VoteResponse({ to: payload.from, from: payload.to, term: payload.term, granted: true }))
+      )
+    } else all {
+      currentTerm' = currentTerm,
+      votesReceived' = votesReceived,
+      votedFor' = votedFor,
+      role' = role,
+      leaderHeard' = leaderHeard,
+      
+      network' = network.exclude(Set(msg)).union(
+        Set(VoteResponse({ to: payload.from, from: payload.to, term: currentTerm.get(payload.to), granted: false }))
+      )
     }
   }
 
-  action handleVoteResponse(n, m) = {
-    all {
-      currentTerm' = currentTerm.set(n, m.term),
+  action handleVoteResponse(payload, msg) = {
+    val peers = Nodes.exclude(Set(payload.to))
+    val quorumReached = votesReceived.get(payload.to) + 1 >= QuorumSize
 
-      if (state.get(n) == Candidate and m.term == currentTerm.get(n) and m.granted)
-        votesReceived' = votesReceived.set(n, votesReceived.get(n).union(Set(m.voterId)))
-      else
+    all {
+      payload.term == currentTerm.get(payload.to),
+      role.get(payload.to) == Candidate,
+
+      votedFor' = votedFor,
+      currentTerm' = currentTerm,
+      leaderHeard' = leaderHeard,
+
+      if (payload.granted) all {
+        role' = role.set(payload.to, if (quorumReached) Leader else role.get(payload.to)),
+        votesReceived' = votesReceived.set(payload.to, votesReceived.get(payload.to) + 1),
+        network' = network.exclude(Set(msg)).union(
+          peers.map(peer => AppendEntries({ to: peer, from: payload.to, term: currentTerm.get(payload.to) }))
+        )
+      } else all {
+        role' = role,
         votesReceived' = votesReceived,
+        network' = network.exclude(Set(msg))
+      }
     }
   }
 
@@ -105,84 +105,100 @@ module raft {
     val peers = Nodes.exclude(Set(n))
 
     all {
-      state.get(n) == Leader,
+      role.get(n) == Leader,
+
+      votedFor' = votedFor,
+      leaderHeard' = leaderHeard,
+      role' = role,
+      votesReceived' = votesReceived,
+      currentTerm' = currentTerm,
 
       network' = network.union(
-        peers.map(peer =>
-          AppendEntries({ term: currentTerm.get(n), leaderId: n })
-        )
-      ),
+        peers.map(peer => AppendEntries({ to: peer, from: n, term: currentTerm.get(n) }))
+      )
     }
   }
 
-  action handleAppendEntries(n, msg) = {
-    all {
-      msg.term >= currentTerm.get(n),
+  action handleAppendEntries(payload, msg) = all {
+    payload.term >= currentTerm.get(payload.to),
 
-      currentTerm' = currentTerm.set(n, msg.term),
-      state' = state.set(n, Follower),
-      leaderHeard' = leaderHeard.set(n, true)
-    }
+    votedFor' = votedFor,
+    votesReceived' = votesReceived,
+
+    leaderHeard' = leaderHeard.set(payload.to, true),
+    currentTerm' = currentTerm.set(payload.to, payload.term),
+    role' = role.set(payload.to, Follower),
+    network' = network.exclude(Set(msg))
   }
 
-  action tick(n) = {
-    val currentClock = clock.get(n)
-    val reached = currentClock <= 2
+  action expireLeaderHeard(n) = all {
+    currentTerm' = currentTerm,
+    leaderHeard' = leaderHeard.set(n, false),
+    votedFor' = votedFor,
+    votesReceived' = votesReceived,
+    role' = role,
+    network' = network 
+  } 
 
-    if (reached) all {
-      leaderHeard' = leaderHeard.set(n, false),
-      clock' = clock.set(n, 0)
-    } else all {
-      leaderHeard' = leaderHeard,
-      clock' = clock.set(n, currentClock + 1)
-    }
-  }
+  action noop = all { 
+    currentTerm' = currentTerm,
+    leaderHeard' = leaderHeard,
+    votedFor' = votedFor,
+    votesReceived' = votesReceived,
+    role' = role,
+    network' = network 
+  } 
 
   action init = all {
     // per-node states
-    clock' = Nodes.mapBy(n => 0),
     currentTerm' = Nodes.mapBy(n => 0),
+    leaderHeard' = Nodes.mapBy(n => false),
     votedFor' = Nodes.mapBy(n => None),
     votesReceived' = Nodes.mapBy(n => 0),
-    state' = Nodes.mapBy(n => Follower),
-    leaderHeard' = Nodes.mapBy(n => 0),
+    role' = Nodes.mapBy(n => Follower),
 
     // simulation state
     network' = Set()
   }
 
-  action noop = all {
-    clock' = clock,
-    currentTerm' = currentTerm,
-    votedFor' = votedFor,
-    votesReceived' = votesReceived,
-    state' = state,
-    leaderHeard' = leaderHeard,
+  action consumeNetwork = all {
+    network.size() > 0,
 
-    network' = network
+    nondet msg = oneOf(network)
+
+    match msg {
+      | RequestVote(payload) => handleRequestVote(payload, msg)
+      | VoteResponse(payload) => handleVoteResponse(payload, msg)
+      | AppendEntries(payload) => handleAppendEntries(payload, msg)
+    }
   }
 
   action step = all {
-    nondet n = oneOf(Nodes)
+    nondet n = Nodes.oneOf()
 
     any {
-      tick(n),
+      expireLeaderHeard(n),
       becomeCandidate(n),
       sendAppendEntries(n),
-      all {
-        network.size() > 0,
-        nondet msg = oneOf(network)
-        match msg {
-          | RequestVote(m) => handleRequestVote(n, m)
-          | AppendEntries(m) => noop
-          | VoteResponse(m) => noop
-        }
-      }
+      consumeNetwork,
     }
   }
 
   val foobar = {
     val terms = Nodes.map(n => currentTerm.get(n))
-    terms.forall(t => Nodes.filter(n => state.get(n) == Leader and currentTerm.get(n) == t).size() <= 1)
+    terms.forall(term => and {
+      // Nodes need to have received at least QuorumSize
+      // amount of votes to be the leader of a term
+      Nodes.filter(node => and {
+        role.get(node) == Leader,
+        currentTerm.get(node) == term
+      }).forall(node => votesReceived.get(node) >= QuorumSize),
+
+      // Each term must have at most one leader
+      Nodes.filter(node => and {
+        role.get(node) == Leader,
+        currentTerm.get(node) == term
+      }).size() <= 1,
+    })
   }
 }
